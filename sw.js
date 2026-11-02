@@ -1,5 +1,5 @@
-/* FitCheck Service Worker：离线缓存应用外壳 */
-const CACHE = 'fitcheck-v1';
+/* FitCheck Service Worker: network-first for updates, cache fallback for offline */
+const CACHE = 'fitcheck-v2';
 const ASSETS = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png'
@@ -17,15 +17,14 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
   e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then(hit => {
-      if (hit) return hit;
-      return fetch(e.request).then(res => {
+    fetch(e.request)
+      .then(res => {
         if (res && res.ok) {
           const copy = res.clone();
           caches.open(CACHE).then(c => c.put(e.request, copy));
         }
         return res;
-      }).catch(() => caches.match('./index.html'));
-    })
+      })
+      .catch(() => caches.match(e.request, { ignoreSearch: true }).then(hit => hit || caches.match('./index.html')))
   );
 });
