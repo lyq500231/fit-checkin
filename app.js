@@ -1708,6 +1708,11 @@ function renderSettings() {
           '<input type="file" accept="application/json,.json" class="js-file" hidden>' +
           '<div class="hr-note" style="margin-top:11px">数据仅保存在<b>本机浏览器</b>的 localStorage 中，不会上传任何服务器。清除浏览器数据 / 换设备会导致记录丢失，<b>请定期导出 JSON 备份</b>。</div>' +
         '</div>' +
+        '<div class="card">' +
+          '<div class="card-head"><div class="card-title"><span class="ic">📲</span>安装为 App</div></div>' +
+          '<div class="kv"><span class="muted">安卓 APK（约 2.3 MB，签名版）</span><a class="btn sm primary" href="fit-checkin.apk" download>⬇ 下载并安装</a></div>' +
+          '<div class="hr-note" style="margin-top:11px">APK 相当于给这个网站套了一层原生外壳：安装后<strong>全屏独立运行、断网也能打卡</strong>；网站更新时 App 自动跟随，无需重装。安装时如提示「允许未知来源应用」，点允许即可。<br>iPhone 无需 APK：Safari 打开本网页 → 分享 → <b>添加到主屏幕</b>，效果相同。</div>' +
+        '</div>' +
 
       '</div>' +
     '</div>';
