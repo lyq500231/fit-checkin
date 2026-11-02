@@ -31,12 +31,12 @@ function prettyDate(s) {
   return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + WEEK_CN[d.getDay()];
 }
 function relDay(s) {
-  const diff = daysBetween(todayStr(), s);
+  const diff = daysBetween(todayStr(), s);   // diff > 0 表示未来
   if (diff === 0) return '今天';
-  if (diff === 1) return '昨天';
-  if (diff === -1) return '明天';
-  if (diff > 1 && diff < 7) return diff + '天前';
-  if (diff < -1 && diff > -7) return (-diff) + '天后';
+  if (diff === 1) return '明天';
+  if (diff === -1) return '昨天';
+  if (diff > 1 && diff < 7) return diff + '天后';
+  if (diff < -1 && diff > -7) return (-diff) + '天前';
   return '';
 }
 function startOfWeek(s) {
