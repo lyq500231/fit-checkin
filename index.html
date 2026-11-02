@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#c11236" />
+<meta name="color-scheme" content="dark light" />
+<link rel="icon" type="image/png" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="健身打卡" />
+<meta name="description" content="本地健身打卡：记录每日训练项目、每组次数重量、达标情况与身体数据" />
+<title>健身打卡 · FitCheck</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <linearGradient id="dbMetal" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#ffffff"/><stop offset=".38" stop-color="#cfd6dd"/><stop offset=".62" stop-color="#8b96a2"/><stop offset="1" stop-color="#4d5762"/>
+          </linearGradient>
+          <linearGradient id="dbRub" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#4b545e"/><stop offset=".45" stop-color="#20262d"/><stop offset="1" stop-color="#0b0e12"/>
+          </linearGradient>
+          <g id="dbShape">
+            <rect x="12" y="29.4" width="40" height="5.2" rx="2.6" fill="url(#dbMetal)"/>
+            <rect x="12.8" y="30.1" width="38.4" height="1.1" rx=".55" fill="#ffffff" opacity=".7"/>
+            <rect x="16" y="19" width="8" height="26" rx="3.4" fill="url(#dbRub)"/>
+            <rect x="40" y="19" width="8" height="26" rx="3.4" fill="url(#dbRub)"/>
+            <rect x="9.5" y="23" width="5.4" height="18" rx="2.6" fill="url(#dbRub)"/>
+            <rect x="49.1" y="23" width="5.4" height="18" rx="2.6" fill="url(#dbRub)"/>
+            <rect x="6.6" y="27.6" width="2.6" height="8.8" rx="1.3" fill="url(#dbRub)"/>
+            <rect x="54.8" y="27.6" width="2.6" height="8.8" rx="1.3" fill="url(#dbRub)"/>
+            <rect x="17.2" y="20.6" width="1.5" height="22.8" rx=".75" fill="#7c8894" opacity=".5"/>
+            <rect x="41.2" y="20.6" width="1.5" height="22.8" rx=".75" fill="#7c8894" opacity=".5"/>
+          </g>
+        </defs>
+        <g transform="rotate(-45 32 32)" opacity=".72"><use href="#dbShape"/></g>
+        <g transform="rotate(45 32 32)"><use href="#dbShape"/></g>
+      </svg>
+    </div>
+      <div class="brand-text">
+        <div class="brand-title">健身打卡</div>
+        <div class="brand-sub" id="brandSub">今天也要练起来</div>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="主导航"></nav>
+    <div class="topbar-right">
+      <div class="streak-pill" id="streakPill" title="连续达标天数">
+        <span class="flame">🔥</span><span id="streakNum">0</span><span class="streak-unit">天</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="view" id="view-checkin" role="tabpanel"></section>
+    <section class="view" id="view-stats" role="tabpanel" hidden></section>
+    <section class="view" id="view-plan" role="tabpanel" hidden></section>
+    <section class="view" id="view-body" role="tabpanel" hidden></section>
+    <section class="view" id="view-settings" role="tabpanel" hidden></section>
+  </main>
+
+  <nav class="footbar" id="footbar" aria-label="移动端导航"></nav>
+
+  <div class="rest-dock" id="restDock" hidden></div>
+  <div class="modal-mask" id="modalMask" hidden></div>
+  <div class="toast-wrap" id="toastWrap" aria-live="polite"></div>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
