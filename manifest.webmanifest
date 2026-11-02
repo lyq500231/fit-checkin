@@ -1,0 +1,17 @@
+{
+  "name": "健身打卡 FitCheck",
+  "short_name": "健身打卡",
+  "description": "离线健身打卡：记录每日训练项目、每组次数重量与达标情况",
+  "lang": "zh-CN",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1218",
+  "theme_color": "#9c0f33",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
