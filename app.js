@@ -1574,11 +1574,52 @@ function coachWeekJSON(weekOffset) {
     settings: { weeklyGoalDays: state.settings.weeklyGoalDays, passRatio: state.settings.passRatio }
   }, null, 2);
 }
+function coachDumpOverlay(text) {
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;inset:0;z-index:99;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:12px';
+  box.innerHTML =
+    '<div style="background:var(--card,#fff);color:inherit;border-radius:14px;padding:14px;max-width:640px;width:100%;display:flex;flex-direction:column;gap:10px">' +
+      '<div style="font-weight:700">🤖 教练数据 week.json</div>' +
+      '<div class="muted" style="font-size:12px">浏览器把下载写进了私有目录、Termux 读不到时的兜底：复制下面全文，存成手机上的 <code>~/ai-coach/week.json</code>。</div>' +
+      '<textarea id="coachDumpText" readonly spellcheck="false" style="width:100%;height:44vh;font-family:ui-monospace,monospace;font-size:11px;white-space:pre"></textarea>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="coachDumpCopy">复制全文</button>' +
+      '<button class="btn" id="coachDumpClose">关闭</button></div>' +
+      '<div class="muted" id="coachDumpHint" style="font-size:12px"></div>' +
+    '</div>';
+  document.body.appendChild(box);
+  const ta = $('#coachDumpText', box);
+  ta.value = text;
+  $('#coachDumpClose', box).addEventListener('click', () => box.remove());
+  $('#coachDumpCopy', box).addEventListener('click', () => {
+    const hint = $('#coachDumpHint', box);
+    const ok = () => { hint.textContent = '已复制 ✔ 在 Termux 里执行：nano ~/ai-coach/week.json 然后长按粘贴，Ctrl+O 保存、Ctrl+X 退出'; };
+    ta.focus(); ta.select();
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(ok, () => { document.execCommand('copy'); ok(); });
+      } else { document.execCommand('copy'); ok(); }
+    } catch (err) { hint.textContent = '自动复制失败：请长按文本框手动全选复制'; }
+  });
+}
+function postCoachToTermux(text) {
+  /* 自动落盘通道：Termux 里跑 receiver.py 后，点一次按钮文件就写进 ~/ai-coach/week.json。
+     https 页面访问 http://127.0.0.1 是否放行取决于浏览器（vivo 已翻过一次车），
+     所以这里全程静默失败——失败就退回下载/复制两条路，绝不打断用户。 */
+  try {
+    fetch('http://127.0.0.1:8099/week.json', {
+      method: 'POST', mode: 'cors', headers: { 'Content-Type': 'application/json' }, body: text
+    }).then(r => {
+      if (r && r.ok) toast('已自动写入 Termux 的 ~/ai-coach/week.json ✔', 'ok');
+    }).catch(() => {});
+  } catch (e) {}
+}
 function exportCoachJSON() {
   let text = coachWeekJSON(0);
   if (!JSON.parse(text).days.length) text = coachWeekJSON(-1);
   const n = JSON.parse(text).days.length;
   if (!n) { toast('本周和上周都没有可导出的打卡记录', 'info'); return; }
+  if (/[?&]coachdump=1/.test(location.search)) coachDumpOverlay(text);
+  postCoachToTermux(text);
   download('week.json', text, 'application/json', false);
   toast('已生成 week.json（' + n + ' 天记录），放到手机 ~/ai-coach/ 后刷新教练页即可', 'ok');
 }
