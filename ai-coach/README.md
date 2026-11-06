@@ -420,6 +420,12 @@ BW_eff = tokens/s × 每 token 读取字节数 ≈ tokens/s × 模型文件字�
 
 ## 10. Termux / Android 踩坑清单（按血泪程度排序）
 
+> 0. ⚠️ **`curl -L` 会把 404 页面原样存成脚本文件**（真实事故：`receiver.py` 未上线时下载得到 9379 字节的
+> GitHub 404 HTML，Python 去解析里面的 CSS，报 `invalid decimal literal`）。
+> **`-L` 只跟随重定向，不检查状态码**；下载脚本一律用 **`curl -fSL`**（`-f` 让 HTTP ≥ 400 直接失败且不写正文），
+> 落地后**先看头几行再执行**：`head -n 3 file.py`、`python -c "import ast;ast.parse(open('file.py').read())"`。
+> 同理，`curl … | sh` 这种写法在 404 时会把 HTML 交给 shell —— 永远先落盘、先验证、再执行。
+
 1. ⚠️ **`>` 会在执行命令前就截断目标文件**。写成果文件一律 `xxx.new` → 校验内容 → `mv` 覆盖。
 2. ⚠️ 上千字节、含 `'` `$` 或中文的代码**不要用 heredoc 手粘**；用 **gzip+base64**（纯 `A-Za-z0-9+/=`）传，
    或把数据改成纯 ASCII；heredoc 定界符**必须带引号** `<<'EOF'`。
@@ -622,6 +628,56 @@ hopeless 判定、L1/L3 未达标动作全部保留、极端预算下的截断�
 正确是 `--path`（见 §10 第 6 条），已改。
 
 ---
+### 13.6 下载落不到 Termux：Android 私有目录的硬限制（已实现兜底）
+
+**现象**：手机上点「🤖 教练数据 JSON」，浏览器明确弹出 `week.json 2.55KB` 下载完成，
+但 Termux 侧 `find -L /storage/emulated/0/Download` 与 `ls ~/storage/downloads/` **都找不到文件**。
+
+**根因**：vivo 浏览器把下载写进了**应用私有目录**（`Android/data/<浏览器包名>/…`）。
+Android 11+ 起，其他 App（包括 Termux）无法读写 `Android/data` —— 这与之前 `adb push Android/data` 被拒是**同一类沙箱限制**，
+不是权限没给、也不是符号链接问题（`~/storage/downloads -> /storage/emulated/0/Download` 已验证正常）。
+
+**兜底（已实现，`app.js` +28/−0，回归 `FAILS=0/56`）**：URL 带 `?coachdump=1` 时，点按钮除了照常下载，
+还会把 JSON 全文显示在一个浮层文本框里，带「复制全文」按钮（`navigator.clipboard` 优先，`execCommand('copy')` 兜底）：
+
+```text
+https://lyq500231.github.io/fit-checkin/?coachdump=1
+→ 设置 → 点「🤖 教练数据 JSON」→ 复制全文
+→ Termux: nano ~/ai-coach/week.json  长按粘贴 → Ctrl+O 保存 → Ctrl+X
+```
+
+**为什么不用更自动的路子**：让页面直接 `POST` 到 Termux 里起的本地 HTTP 服务（一行代码就能落盘），
+前提是浏览器允许 https 页面访问 `http://127.0.0.1`。vivo 浏览器在这点上已经表现过一次（本地 XHR 流式返回被拦），
+所以先做**确定性最高**的复制方案，自动上传留作后续实验。
+
+---
+### 13.7 自动落盘通道：`receiver.py`（Pages 反过来成了下发通道）
+
+有了 §14 的部署，`ai-coach/` 里的文件都能被手机 `curl` 拉下来 —— **Pages 从"结果展示"变成了"资产分发通道"**，这解决了整晚卡住我们的"电脑→手机没有传输通道"：
+
+```bash
+curl -fSL https://lyq500231.github.io/fit-checkin/ai-coach/receiver.py -o ~/receiver.py
+head -n 3 ~/receiver.py          # 必须是 #!/usr/bin/env python3，不是 <html>
+python ~/receiver.py            # 监听 127.0.0.1:8099
+```
+
+然后在 FitCheck 点「🤖 教练数据 JSON」：`app.js` 会照常下载，**同时** `POST` 一份到 `http://127.0.0.1:8099/week.json`，
+接收端校验通过后原子写入 `~/ai-coach/week.json`（`.new` → `os.replace`），全程零复制粘贴。
+
+**本地测试 `FAILS=0/15`**（同进程起服务，合法/非法/错结构/超限/预检/响应头全覆盖），并且**测试当场抓出两个真 bug**：
+
+| Bug | 症状 | 修法 |
+|---|---|---|
+| 回 413 前**没读完请求体** | 客户端还在发 8MB，服务端直接关闭 → 连接重置（`WinError 10053`），浏览器只看到"网络错误"而不是 413 | 先分块 drain 掉 `Content-Length` 字节，再回 413 |
+| 默认 `HTTP/1.0` + 响应无 `Content-Length` | 升到 `HTTP/1.1` 后若仍缺长度头，浏览器会**一直等一个永远不会结束的 body** | `protocol_version="HTTP/1.1"` + 每个响应（含 204 预检）都显式带 `Content-Length` |
+
+安全边界（有意为之）：只绑 `127.0.0.1`（不可被局域网访问）、写盘前必须通过 `json.loads` 且 `days` 是数组、上限 4MB、原子替换。
+
+⚠️ **仍未验证的一点**：vivo 浏览器是否允许 https 页面访问 `http://127.0.0.1`（混合内容 / Private Network Access 都可能拦）。
+所以三条路并存，按确定性排序：**① `?coachdump=1` 复制浮层（确定可用）→ ② 自动 POST（待真机验证）→ ③ 浏览器下载（已确认落进私有目录，Termux 读不到）**。
+`app.js` 里的 POST 全程静默 `catch`，失败不会有任何提示，也不会影响下载与浮层。
+
+---
 ## 14. 当前状态与待办
 
 | 编号 | 事项 | 状态 |
@@ -639,5 +695,6 @@ hopeless 判定、L1/L3 未达标动作全部保留、极端预算下的截断�
 | L | **部分完成**：pp 36.87→29.37→21.90→15.43 证实 prefill 随长度显著劣化（attention 二次方），**不是恒定的 37.5 t/s**；pp512=36.87 是否已贴近本机 INT8 算力上限，仍需 GEMM 微基准定量 → 待办 M | ⏳ 降级 |
 | M | 求本机聚合 INT8 峰值（GEMM/dot 微基准），才能判定 prefill 还有没有倍数空间；顺带解释 8192 档 tg 方差为何高达 ±1.48（16%） | ⏳ 可选 |
 | L | 核查 **prefill 是否已接近算力上限**：pp 4096 只有 21.90 ± 3.39，且 pp/tg≈2~3。需先求出本机聚合 INT8 峰值（或跑 GEMM 微基准）才能判断这是"已到极限"还是"仍有 2~3 倍空间"。**注意 §2.1：不能用 pp/tg>20 当判据** | ⏳ 待评估，可能是最后一块大头 |
-| G | **部署到线上**：改动目前只在 `ai-coach` 分支，手机上的 FitCheck 还没有「教练数据 JSON」按钮；需一次性令牌走 API 部署（见 `DEPLOY.md`） | ⏳ 待你授权 |
+| N | 教练数据落盘：浏览器下载进 Android 私有目录、Termux 读不到（沙箱限制）→ ①?coachdump=1 复制浮底（§13.6）②eceiver.py 自动 POST 通道（本地 FAILS=0/15，真机待验证，§13.7） | ①✅ ②⏳ |
+| G | **部署到线上**
 | H | 质量资产：主项目回归 56 条 + 压缩层单测 45 条 = **101 条断言**（后者从 coach.html 抽真实代码 eval 测试） | ✅ 已入库 |
