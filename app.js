@@ -1525,6 +1525,63 @@ function exportJSON() {
   download('健身打卡备份-' + todayStr() + '.json', JSON.stringify(state, null, 2), 'application/json', false);
   toast('已导出 JSON 备份', 'ok');
 }
+/* ------------------------- AI 教练数据桥（端侧 llama-server 消费） ------------------------- */
+function isoWeekLabel(dateStr) {
+  const d = parseDate(dateStr);
+  const t = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dow = (t.getDay() + 6) % 7;
+  t.setDate(t.getDate() - dow + 3);
+  const first = new Date(t.getFullYear(), 0, 1);
+  const wn = 1 + Math.round(((t - first) / 86400000 - 3 + ((first.getDay() + 6) % 7)) / 7);
+  return t.getFullYear() + '-W' + pad2(wn);
+}
+function coachWeekJSON(weekOffset) {
+  const off = num(weekOffset) || 0;
+  const ws = addDays(startOfWeek(todayStr()), off * 7);
+  const u = state.settings.unit || 'kg';
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(ws, i);
+    const lg = state.logs[d];
+    if (!lg) continue;
+    const items = [];
+    (lg.entries || []).forEach(e => {
+      const rec = (e.sets || []).filter(s => num(s.reps) > 0);
+      if (!rec.length) return;
+      const r = parseReps(e.reps);
+      const tgt = r.min || r.max || 0;   // 达标线 = 次数区间下限，保证 done/target 与 pass 语义一致
+      const w = num(e.targetWeight) || num(rec[rec.length - 1].weight) || 0;
+      items.push({
+        name: e.name + (w > 0 ? '（' + w + u + '）' : ''),
+        pass: entryStat(e).done,
+        reps: e.reps || '',
+        targetSets: e.targetSets || 1,
+        sets: rec.map(s => ({ done: num(s.reps), target: tgt, weight: num(s.weight) }))
+      });
+    });
+    if (!items.length) continue;
+    const dd = parseDate(d);
+    days.push({
+      date: pad2(dd.getMonth() + 1) + '-' + pad2(dd.getDate()) + ' ' + WEEK_CN[dd.getDay()],
+      planName: lg.planName || '',
+      rest: lg.rest === true,
+      items: items
+    });
+  }
+  return JSON.stringify({
+    week: isoWeekLabel(ws),
+    days: days,
+    settings: { weeklyGoalDays: state.settings.weeklyGoalDays, passRatio: state.settings.passRatio }
+  }, null, 2);
+}
+function exportCoachJSON() {
+  let text = coachWeekJSON(0);
+  if (!JSON.parse(text).days.length) text = coachWeekJSON(-1);
+  const n = JSON.parse(text).days.length;
+  if (!n) { toast('本周和上周都没有可导出的打卡记录', 'info'); return; }
+  download('week.json', text, 'application/json', false);
+  toast('已生成 week.json（' + n + ' 天记录），放到手机 ~/ai-coach/ 后刷新教练页即可', 'ok');
+}
 function exportSetsCSV() {
   const rows = [['日期', '星期', '训练主题', '动作', '组序', '次数', '重量(' + state.settings.unit + ')', '单组容量', '是否达标', '目标组数', '目标次数', '目标重量', '休息秒', '训练感受', '当日小结']];
   Object.keys(state.logs).sort().forEach(d => {
@@ -1699,6 +1756,7 @@ function renderSettings() {
             '<button class="btn js-exp-json">⬇ 导出 JSON 备份</button>' +
             '<button class="btn js-exp-csv">⬇ 训练明细 CSV</button>' +
             '<button class="btn js-exp-mcsv">⬇ 身体数据 CSV</button>' +
+            '<button class="btn js-exp-coach">🤖 教练数据 JSON</button>' +
           '</div>' +
           '<div class="field-row" style="margin-top:9px">' +
             '<button class="btn js-imp">⬆ 导入 JSON 备份</button>' +
@@ -1740,6 +1798,8 @@ function bindSettings(root) {
   $('.js-exp-json', root).addEventListener('click', exportJSON);
   $('.js-exp-csv', root).addEventListener('click', exportSetsCSV);
   $('.js-exp-mcsv', root).addEventListener('click', exportMetricsCSV);
+  const coachBtn = $('.js-exp-coach', root);
+  if (coachBtn) coachBtn.addEventListener('click', exportCoachJSON);
   $('.js-sample', root).addEventListener('click', loadSample);
   const fileInp = $('.js-file', root);
   $('.js-imp', root).addEventListener('click', () => fileInp.click());
