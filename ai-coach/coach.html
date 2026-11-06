@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI 教练 · 端侧离线</title>
+<style>
+:root{--bg:#12100f;--card:#1c1917;--line:#2c2724;--fg:#f3ede8;--mut:#a89e96;--ac:#e23b3b;--ok:#2fbf71;--warn:#e8a33d}
+*{box-sizing:border-box}
+body{margin:0;padding:14px;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+h1{font-size:17px;margin:0 0 4px}
+.tag{font-size:11px;color:var(--mut);font-weight:400}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
+label{display:block;font-size:12px;color:var(--mut);margin:6px 0 4px}
+textarea,input[type=text],select{width:100%;background:#0f0d0c;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
+textarea{min-height:96px;resize:vertical}
+.row{margin:8px 0}
+.btns{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:9px 14px;font:inherit;font-weight:600}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--mut)}
+button:disabled{opacity:.45}
+.budget{font-size:12px;color:var(--mut);margin-top:6px}
+.budget b{color:var(--warn);font-weight:600}
+.ans{white-space:pre-wrap;min-height:40px}
+.metrics{font-size:11px;color:var(--mut);margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;font-family:monospace}
+#status{font-size:12px;padding:7px 10px;border-radius:8px;background:#0f0d0c;border:1px solid var(--line);color:var(--mut)}
+#status.ok{color:var(--ok);border-color:rgba(47,191,113,.35)}
+#status.bad{color:var(--ac);border-color:rgba(226,59,59,.35)}
+.hint{font-size:11px;color:var(--mut);margin-top:8px;line-height:1.5}
+code{background:#0f0d0c;padding:1px 4px;border-radius:4px;font-size:11px;word-break:break-all}
+.think{color:var(--warn);font-style:italic}
+</style>
+</head>
+<body>
+<h1>AI 教练 <span class="tag">端侧推理 · 数据不出手机 · 飞行模式可用</span></h1>
+<div id="status">正在检测本地模型服务…</div>
+
+<section class="card">
+  <div class="row">
+    <label>训练摘要（从 ./week.json 自动读取，可手工修改）</label>
+    <textarea id="ctx" spellcheck="false" placeholder="留空则纯聊天，不注入任何记录"></textarea>
+  </div>
+  <div class="row">
+    <label>问题</label>
+    <input type="text" id="q" value="这周胸练够了吗？明天该练什么？">
+  </div>
+  <div class="row btns">
+    <button id="ask">开始</button>
+    <button id="stop" class="ghost" disabled>停止</button>
+    <select id="mt" style="width:auto">
+      <option value="60">输出≤60</option>
+      <option value="120" selected>输出≤120</option>
+      <option value="200">输出≤200</option>
+    </select>
+    <label style="margin:0"><input type="checkbox" id="useCtx" checked style="width:auto"> 注入摘要</label>
+  </div>
+  <div class="budget" id="budget"></div>
+  <div class="hint">摘要注入会增加 prefill 耗时；system 提示词固定不变，命中服务端 KV 缓存后几乎不重复计费。</div>
+</section>
+
+<section class="card">
+  <h1 style="font-size:14px">回答</h1>
+  <div class="ans" id="ans"></div>
+  <div class="metrics" id="metrics"></div>
+</section>
+
+<script>
+/* ================= 性能常量：全部来自 iQOO 12（骁龙8 Gen3/16GB）实测 =================
+   llama-bench(基线) pp512 t4 = 37.48 t/s ; tg128 t4 = 11.35 t/s
+   llama-server 服务态实测    predicted_per_second ≈ 13.5 t/s
+   中文 token 经验系数：1 token ≈ 1.6 个汉字（Qwen 系列，粗估用，非精确分词）
+   用途：把“延迟预算”显示在 UI 上，让用户和开发者都知道自己在花多少钱。
+   ================================================================================ */
+const PP_TPS = 37.5, TG_TPS = 13.5, ZH_CHARS_PER_TOKEN = 1.6;
+
+/* 端侧必须显式设上限：模型无限长生成 = 用户无限等待（今天实测 80 token≈5.9s） */
+const SYSTEM_PROMPT = [
+  '你是严谨的力量与体能教练。',
+  '规则：1) 只依据用户给出的训练记录判断，不编造数据；',
+  '2) 记录不足时明确说信息不够并指出缺哪一项；',
+  '3) 结论给具体数字（组数/次数/RPE）；',
+  '4) 出现疼痛、麻木、异常疲劳时优先建议就医；',
+  '5) 全程中文，不超过200字，不使用思考过程标签。'
+].join('');
+
+const $ = id => document.getElementById(id);
+const estTok = s => Math.ceil((s || '').trim().length / ZH_CHARS_PER_TOKEN);
+
+/* ---------- 预检：服务在不在（同源，用相对路径，不写死 host） ---------- */
+async function preflight(){
+  const st = $('status');
+  try{
+    const r = await fetch('./health', {cache:'no-store'});
+    if(r.ok){
+      st.className='ok';
+      st.textContent='模型服务在线（同源托管，无需 CORS）';
+      $('ask').disabled=false;
+      loadWeek();
+      return true;
+    }
+    throw new Error('HTTP '+r.status);
+  }catch(e){
+    st.className='bad';
+    st.innerHTML='模型服务未启动。请在 Termux 里运行：<br><code>llama-server -m ~/models/Qwen3-4B-Q4_K_M.gguf --host 127.0.0.1 --port 8080 -c 4096 -t 4 --path ~/ai-coach</code>';
+    $('ask').disabled=true;
+    return false;
+  }
+}
+
+async function loadWeek(){
+  try{
+    const r = await fetch('./week.json', {cache:'no-store'});
+    if(r.ok){
+      const j = await r.json();
+      const b = tokBudgetFor(parseInt($('mt').value,10), estTok($('q').value), estTok(SYSTEM_PROMPT));
+      $('ctx').value = summarize(j, b.ctx);
+      renderBudget();
+    }
+  }catch(e){ /* 没有数据文件就纯聊天，不报错 */ }
+}
+
+/* ================= COMPACT-BEGIN（node 单测靠这两行标记抽取，勿删） =================
+   端侧上下文工程的真实约束：模型能读多少，取决于"你还剩几秒"。
+   预算由输出上限反解得到，而不是拍脑袋写死 640 字符。
+   压缩分级 L1→L5，牺牲顺序固定：先丢达标项的细节，最后才丢未达标项。
+   ================================================================================ */
+const SEC_COLD = 12, SEC_WARM = 8;
+const TAGS = { 2: '｜L2 达标项只留组数', 3: '｜L3 达标项极简', 4: '｜L4 达标项按天聚合', 5: '｜L5 只留最关键3天', 6: '｜L6 超预算已截断' };
+function estTokOf(s){ return Math.ceil((s || '').trim().length / ZH_CHARS_PER_TOKEN); }
+function mergeSets(sets){
+  const g = [];
+  (sets || []).forEach(s => {
+    const key = (typeof s.done === 'number' ? s.done : 0) + '/' + (typeof s.target === 'number' ? s.target : 0);
+    const last = g[g.length - 1];
+    if (last && last.key === key) last.n++; else g.push({ key: key, n: 1 });
+  });
+  return g.map(x => x.n > 1 ? x.key + '×' + x.n : x.key).join(' ');
+}
+function shortName(n){ return String(n || '').replace(/[（）]/g, '').replace(/\s+/g, ''); }
+function shortDate(s){ return String(s || '').split(' ')[0]; }
+function tokBudgetFor(maxTok, qTok, sysTok){
+  const decode = maxTok / TG_TPS;
+  const cold = Math.floor((SEC_COLD - decode) * PP_TPS) - sysTok - qTok;
+  const warm = Math.floor((SEC_WARM - decode) * PP_TPS) - qTok;
+  const MIN_CTX = 64;
+  const ctx = Math.min(cold, warm);
+  // 预算低于 MIN_CTX 时，压缩已经救不回来：标记 hopeless，但仍按 MIN_CTX 保守压缩，
+  // 绝不因为"反正超了"就把全量摘要塞进去（那只会让冷启动更久）。
+  if (ctx < MIN_CTX) return { decode: decode, cold: cold, warm: warm, ctx: MIN_CTX, hopeless: true };
+  return { decode: decode, cold: cold, warm: warm, ctx: ctx, hopeless: false };
+}
+function buildSummary(days, level){
+  const rows = [];
+  (days || []).forEach(day => {
+    const okBits = [], failBits = [];
+    let okCount = 0, okSets = 0;
+    (day.items || []).forEach(it => {
+      const sets = it.sets || [];
+      if (!sets.length && !it.reps) return;
+      const nm = shortName(it.name);
+      const reps = sets.length
+        ? (level >= 1 ? mergeSets(sets) : sets.map(s => s.done + '/' + s.target).join(' '))
+        : String(it.reps || '');
+      if (it.pass !== false) {
+        okCount++; okSets += sets.length;
+        if (level <= 1) okBits.push(nm + ' ' + reps);
+        else if (level === 2) okBits.push(nm + sets.length + '组✓');
+        else if (level === 3) okBits.push(nm + sets.length);
+      } else {
+        failBits.push(nm + ' ' + reps + (level >= 1 ? '✗' : '(未达标)'));
+      }
+    });
+    let line;
+    if (level >= 4) {
+      const agg = (day.planName ? shortName(day.planName) : '训练日') + okCount + '项' + okSets + '组✓';
+      line = failBits.concat(okCount ? [agg] : []).join(' ');
+    } else {
+      line = okBits.concat(failBits).join(level === 3 ? '·' : ' ');
+    }
+    if (line) rows.push({ date: shortDate(day.date), text: line, hasFail: failBits.length > 0 });
+  });
+  let out = rows;
+  if (level >= 5) {
+    const fails = rows.filter(r => r.hasFail), rest = rows.filter(r => !r.hasFail);
+    out = fails.concat(rest).slice(0, 3);
+  }
+  return out.map(r => r.date + '：' + r.text).join('\n');
+}
+function summarize(d, budgetTok){
+  if (typeof d === 'string') return d;
+  const days = (d && (d.days || d.logs)) || [];
+  if (!days.length) return '';
+  const cap = (typeof budgetTok === 'number' && budgetTok > 0) ? budgetTok : 0;
+  if (!cap) return buildSummary(days, 0);
+  let lv = 1, text = buildSummary(days, 1);
+  for (lv = 1; lv <= 5; lv++) {
+    text = buildSummary(days, lv);
+    if (estTokOf(text) + estTokOf(TAGS[lv] || '') <= cap) break;
+  }
+  if (lv > 5) lv = 6;
+  const tag = TAGS[lv] || '';
+  if (estTokOf(text) + estTokOf(tag) > cap) {
+    const hard = Math.max(0, Math.floor((cap - estTokOf(tag)) * ZH_CHARS_PER_TOKEN) - 8);
+    text = text.slice(0, hard); lv = 6;
+  }
+  const finalTag = TAGS[lv] || '';
+  return text + (lv >= 2 ? finalTag : '');
+}
+/* ================= COMPACT-END ================= */
+function renderBudget(){
+  const ctxTok = $('useCtx').checked ? estTok($('ctx').value) : 0;
+  const qTok = estTok($('q').value);
+  const maxTok = parseInt($('mt').value, 10);
+  const sysTok = estTok(SYSTEM_PROMPT);
+  const b = tokBudgetFor(maxTok, qTok, sysTok);
+  const cold = (sysTok + ctxTok + qTok) / PP_TPS + b.decode;
+  const warm = (ctxTok + qTok) / PP_TPS + b.decode;
+  let warn = '';
+  if (b.hopeless) {
+    warn = '<br><b>⚠ 预算不足（冷 ' + b.cold + '／稳 ' + b.warm + ' tok，均低于 64）：输出≤' + maxTok +
+           ' 单独占 ' + b.decode.toFixed(1) + 's 就是主因。摘要已按 ' + b.ctx + ' tok 保守压缩，但请把输出降到 ≤60。</b>';
+  } else if (ctxTok > b.ctx) {
+    warn = '<br><b>⚠ 摘要 ' + ctxTok + ' tok 仍超预算 ' + b.ctx + ' tok</b>：已压到最低级 L6。';
+  }
+  $('budget').innerHTML =
+    '摘要 <b>' + ctxTok + '</b> tok ／ 预算 <b>' + (b.hopeless ? '0（不可行）' : b.ctx) + '</b> ｜ 问题 ' + qTok +
+    ' ｜ system ' + sysTok + ' ｜ 输出≤' + maxTok + '（占 ' + b.decode.toFixed(1) + 's）' +
+    '<br>冷启动 ' + cold.toFixed(1) + 's ｜ 稳态（system 命中 KV 前缀） ' + warm.toFixed(1) + 's ｜ 阈值 冷' +
+    SEC_COLD + 's／稳' + SEC_WARM + 's' + warn;
+}
+
+let ctrl = null;
+
+async function ask(){
+  const ans=$('ans'), met=$('metrics');
+  const maxTok = parseInt($('mt').value,10);
+  const msgs = [{role:'system',content:SYSTEM_PROMPT}];
+  const ctx = $('useCtx').checked ? $('ctx').value.trim() : '';
+  let userText = '';
+  if(ctx) userText += '【近期训练记录】\n' + ctx + '\n\n';
+  userText += $('q').value.trim();
+  msgs.push({role:'user',content:userText});
+
+  ans.textContent=''; met.textContent='请求中…';
+  $('ask').disabled=true; $('stop').disabled=false;
+
+  const body = {
+    messages: msgs,
+    stream: true,                       // 必须显式开：/props 里默认是 false
+    max_tokens: maxTok,                 // 必须显式限：/props 里默认 -1（无限）
+    temperature: 0.3,                   // /props 默认 0.8，教练场景要稳定
+    chat_template_kwargs:{enable_thinking:false}  // 今天实测：不关则 token 被思考吃光、content 为空
+  };
+
+  ctrl = new AbortController();
+  const t0 = performance.now();
+  let tFirst = 0, outChars = 0, tokCount = 0, finish = '', usage = null, thinkChars = 0, gotDone = false;
+
+  try{
+    const r = await fetch('./v1/chat/completions',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body), signal: ctrl.signal
+    });
+    if(!r.ok) throw new Error('HTTP '+r.status+' '+await r.text());
+
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf='';
+    while(true){
+      const {value,done} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value,{stream:true});
+      // SSE 按行切；最后一行可能不完整，留在 buf 里等下一块
+      let nl;
+      while((nl = buf.indexOf('\n')) >= 0){
+        const line = buf.slice(0,nl).trim(); buf = buf.slice(nl+1);
+        if(!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if(payload === '[DONE]'){ gotDone = true; continue; }
+        let j; try{ j = JSON.parse(payload); }catch(e){ continue; }
+        const d = j.choices && j.choices[0] && j.choices[0].delta;
+        if(j.usage) usage = j.usage;
+        if(d && d.reasoning_content){                 // 思考漏出来了=模板没被覆盖，要报警
+          thinkChars += d.reasoning_content.length;
+          if(!tFirst) tFirst = performance.now();
+          ans.innerHTML = '<span class="think">[思考中…已消耗 ' + thinkChars + ' 字，建议检查 enable_thinking 参数]</span>';
+          continue;
+        }
+        if(d && d.content){
+          if(!tFirst) tFirst = performance.now();
+          outChars += d.content.length; tokCount += 1;
+          ans.textContent += d.content;
+        }
+        if(j.choices[0].finish_reason) finish = j.choices[0].finish_reason;
+      }
+    }
+    report();
+  }catch(err){
+    if(err.name==='AbortError'){ met.textContent='已手动停止'; ans.textContent+='\n（已停止）'; }
+    else { met.innerHTML='出错：'+err.message+'<br>检查 llama-server 会话日志'; }
+  }finally{
+    $('ask').disabled=false; $('stop').disabled=true; ctrl=null;
+  }
+
+  function report(){
+    const total = (performance.now()-t0)/1000;
+    const ttft  = tFirst ? (tFirst-t0)/1000 : total;
+    const genSecs = total - ttft;
+    const estTokOut = usage ? usage.completion_tokens : Math.ceil(outChars/ZH_CHARS_PER_TOKEN);
+    const tps = genSecs>0 ? (estTokOut/genSecs) : 0;
+    let warn = '';
+    if(finish==='length') warn = '<br><b style="color:#e8a33d">finish_reason=length：被 max_tokens 截断，回答可能不完整 → 提高上限或缩短指令</b>';
+    if(thinkChars>0) warn += '<br><b style="color:#e23b3b">检测到思考内容 '+thinkChars+' 字：enable_thinking 未生效，端侧代价极高</b>';
+    if(!gotDone) warn += '<br>（未收到 [DONE]，流可能异常结束）';
+    met.innerHTML =
+      'TTFT 首字 ' + ttft.toFixed(2) + 's ｜ 总耗时 ' + total.toFixed(2) + 's ｜ 生成 ' + estTokOut +
+      ' tok ≈ ' + tps.toFixed(1) + ' t/s ｜ 输出 ' + outChars + ' 字 ｜ finish=' + (finish||'?') +
+      (usage ? ' ｜ prompt=' + usage.prompt_tokens + ' cached=' + (usage.prompt_tokens_details?.cached_tokens ?? '-') : '') + warn;
+  }
+}
+
+$('ask').onclick = ask;
+$('stop').onclick = () => ctrl && ctrl.abort();
+['useCtx','mt','ctx','q'].forEach(id=>{ $(id).addEventListener('input', renderBudget); $(id).addEventListener('change', renderBudget); });
+$('useCtx').addEventListener('change', renderBudget);
+mt.addEventListener('change', loadWeek);
+renderBudget();
+preflight();
+</script>
+</body>
+</html>
