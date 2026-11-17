@@ -1972,8 +1972,10 @@ function coachEntryOverlay() {
   $('#coachEntryClose', box).addEventListener('click', () => box.remove());
   box.addEventListener('click', (e) => { if (e.target === box) box.remove(); });
   $('#coachEntryGo', box).addEventListener('click', () => {
-    const w = window.open(COACH_URL, '_blank');
-    if (!w) { location.href = COACH_URL; $('#coachEntryHint', box).textContent = '新窗口被拦截，已改为当前页跳转'; }
+    // 11-17：加时间戳穿透缓存 —— 三方对账证明磁盘和服务端都是新版，只有 vivo 浏览器在发旧缓存
+    const url = COACH_URL + '?t=' + Date.now();
+    const w = window.open(url, '_blank');
+    if (!w) { location.href = url; $('#coachEntryHint', box).textContent = '新窗口被拦截，已改为当前页跳转'; }
   });
   $('#coachEntryCopy', box).addEventListener('click', () => {
     const hint = $('#coachEntryHint', box);
