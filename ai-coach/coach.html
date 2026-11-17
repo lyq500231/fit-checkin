@@ -32,7 +32,8 @@ code{background:#0f0d0c;padding:1px 4px;border-radius:4px;font-size:11px;word-br
 </style>
 </head>
 <body>
-<h1>AI 教练 <span class="tag">端侧推理 · 数据不出手机 · 飞行模式可用</span></h1>
+<!-- 版本戳写在 HTML 里（不是 JS 拼的）：缓存的旧页会露出旧版本号或没有版本号，一眼可辨 -->
+<h1>AI 教练 <span class="tag">端侧推理 · 数据不出手机 · 飞行模式可用 · 版本 2026-11-17b</span></h1>
 <div id="status">正在检测本地模型服务…</div>
 
 <section class="card">
@@ -79,6 +80,7 @@ code{background:#0f0d0c;padding:1px 4px;border-radius:4px;font-size:11px;word-br
    选 512 档的理由：真实 prompt ≈ system 84 + 摘要 ~100 + 问题 ~10 ≈ 194 tok，落在 512 以内。
    pp 随长度显著下降（512→36.23、2048→29.37、4096→21.90、8192→15.43），
    所以常量【必须标明取自哪一档】，否则"预算"这个词没有意义（README §13.4）。 */
+const BUILD = '2026-11-17b';   // 指标算术含 nReads 与物理上限保护（旧页没有这个常量）
 const PP_TPS = 36.23, TG_TPS = 11.97, ZH_CHARS_PER_TOKEN = 1.6;
 
 /* 端侧必须显式设上限：模型无限长生成 = 用户无限等待（今天实测 80 token≈5.9s） */
@@ -214,6 +216,26 @@ function summarize(d, budgetTok){
   const finalTag = TAGS[lv] || '';
   return text + (lv >= 2 ? finalTag : '');
 }
+/* 11-17：把指标算术抽成纯函数，因为线上真实翻车的就是这段算术 ——
+   vivo 浏览器整块交付时 genSecs≈0.0014s，旧代码直接除出 34285.7 t/s 这种荒谬数字，
+   而页面把它当成正常结果打印了出来。纯函数才能被单测覆盖（见 coach-compact.test.js）。 */
+function metricsOf(o){
+  const total = Math.max(0.001, o.total);
+  const ttft  = o.ttft > 0 ? Math.min(o.ttft, total) : total;
+  const genSecs = total - ttft;
+  const estTokOut = (o.usage && typeof o.usage.completion_tokens === 'number')
+    ? o.usage.completion_tokens : Math.ceil((o.outChars || 0) / ZH_CHARS_PER_TOKEN);
+  const noStream = (o.nReads <= 1) || (genSecs < 0.5);
+  const tpsGen = noStream ? null : estTokOut / genSecs;
+  const tpsAvg = estTokOut / total;
+  const PHYS_MAX = 60;          // 4B Q4 在本机的实测上限是 11.97 t/s，60 已经是极宽松的边界
+  const flags = [];
+  if(noStream) flags.push('无流式：整块一次性到达（' + o.nReads + ' 块），TTFT≈总耗时，"生成速度"这一项不可测');
+  if(tpsAvg > PHYS_MAX) flags.push('平均 ' + tpsAvg.toFixed(1) + ' t/s 超出手机物理上限 ⇒ 计时有 bug，禁止引用');
+  if(tpsGen !== null && tpsGen > PHYS_MAX) flags.push('生成段 ' + tpsGen.toFixed(1) + ' t/s 不可能 ⇒ 计时有 bug');
+  if(tpsAvg < 1 && total > 30) flags.push('平均 ' + tpsAvg.toFixed(2) + ' t/s 远低于实测 11.97 ⇒ 时间花在排队或代理上，不是模型');
+  return { total: total, ttft: ttft, genSecs: genSecs, estTokOut: estTokOut, noStream: noStream, tpsGen: tpsGen, tpsAvg: tpsAvg, flags: flags };
+}
 /* ================= COMPACT-END ================= */
 function renderBudget(){
   const ctxTok = $('useCtx').checked ? estTok($('ctx').value) : 0;
@@ -264,6 +286,7 @@ async function ask(){
   ctrl = new AbortController();
   const t0 = performance.now();
   let tFirst = 0, outChars = 0, tokCount = 0, finish = '', usage = null, thinkChars = 0, gotDone = false;
+  let nReads = 0;                       // 11-17 新增：分块到达次数，用来区分【真流式】和【整块交付】
 
   try{
     const r = await fetch('./v1/chat/completions',{
@@ -278,6 +301,7 @@ async function ask(){
     while(true){
       const {value,done} = await reader.read();
       if(done) break;
+      nReads++;
       buf += dec.decode(value,{stream:true});
       // SSE 按行切；最后一行可能不完整，留在 buf 里等下一块
       let nl;
@@ -312,19 +336,21 @@ async function ask(){
   }
 
   function report(){
-    const total = (performance.now()-t0)/1000;
-    const ttft  = tFirst ? (tFirst-t0)/1000 : total;
-    const genSecs = total - ttft;
-    const estTokOut = usage ? usage.completion_tokens : Math.ceil(outChars/ZH_CHARS_PER_TOKEN);
-    const tps = genSecs>0 ? (estTokOut/genSecs) : 0;
+    const m = metricsOf({ ttft: tFirst ? (tFirst-t0)/1000 : 0,
+                          total: (performance.now()-t0)/1000,
+                          nReads: nReads, usage: usage, outChars: outChars });
+    const total = m.total, ttft = m.ttft, estTokOut = m.estTokOut;
     let warn = '';
     if(finish==='length') warn = '<br><b style="color:#e8a33d">finish_reason=length：被 max_tokens 截断，回答可能不完整 → 提高上限或缩短指令</b>';
     if(thinkChars>0) warn += '<br><b style="color:#e23b3b">检测到思考内容 '+thinkChars+' 字：enable_thinking 未生效，端侧代价极高</b>';
     if(!gotDone) warn += '<br>（未收到 [DONE]，流可能异常结束）';
     met.innerHTML =
-      'TTFT 首字 ' + ttft.toFixed(2) + 's ｜ 总耗时 ' + total.toFixed(2) + 's ｜ 生成 ' + estTokOut +
-      ' tok ≈ ' + tps.toFixed(1) + ' t/s ｜ 输出 ' + outChars + ' 字 ｜ finish=' + (finish||'?') +
-      (usage ? ' ｜ prompt=' + usage.prompt_tokens + ' cached=' + (usage.prompt_tokens_details?.cached_tokens ?? '-') : '') + warn;
+      '版本 ' + BUILD + ' ｜ TTFT 首字 ' + ttft.toFixed(2) + 's ｜ 总耗时 ' + total.toFixed(2) + 's ｜ 分块到达 ' + nReads + ' 次 ｜ 生成 ' +
+      estTokOut + ' tok ｜ 平均 ' + m.tpsAvg.toFixed(2) + ' t/s' +
+      (m.tpsGen === null ? ' ｜ 生成段 不可测（无流式）' : ' ｜ 生成段 ' + m.tpsGen.toFixed(1) + ' t/s') +
+      ' ｜ 输出 ' + outChars + ' 字 ｜ finish=' + (finish||'?') +
+      (usage ? ' ｜ prompt=' + usage.prompt_tokens + ' cached=' + (usage.prompt_tokens_details?.cached_tokens ?? '-') : '') + warn +
+      m.flags.map(f => '<br><b style="color:#e23b3b">⚠ ' + f + '</b>').join('');
   }
 }
 
