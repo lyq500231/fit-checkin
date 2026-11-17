@@ -61,5 +61,5 @@ curl -s -o /dev/null -X POST "http://127.0.0.1:$PORT/completion" \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"warmup","n_predict":16,"temperature":0}'
 t3=$(date +%s%N)
-echo "warm : $(( (t3 - t2) / 1000000 )) ms  （这两个数的差就是 §8.8 那 32 倍的账单）"
+echo "warm : $(( (t3 - t2) / 1000000 )) ms  （两个数的差 = 本次进程的预热税；注意 §8.8 那个 32 倍是 prefill 每 token【速率】口径，别和秒数混着讲）"
 echo "OK: 浏览器打开 http://127.0.0.1:$PORT/coach.html"
