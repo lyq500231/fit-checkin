@@ -71,7 +71,15 @@ code{background:#0f0d0c;padding:1px 4px;border-radius:4px;font-size:11px;word-br
    中文 token 经验系数：1 token ≈ 1.6 个汉字（Qwen 系列，粗估用，非精确分词）
    用途：把“延迟预算”显示在 UI 上，让用户和开发者都知道自己在花多少钱。
    ================================================================================ */
-const PP_TPS = 37.5, TG_TPS = 13.5, ZH_CHARS_PER_TOKEN = 1.6;
+/* 11-17 口径修正。这两个值原来拍在文档里（37.5 / 13.5），而 13.5 比实测 tg128 高 12.5%，
+   会把【不可行】显示成【勉强可行】——同一档预算差约 25 tok，足以翻转结论。
+   现在全部换成 11-16 真机实测（iQOO 12，冷机、拔充电器）：
+     TG_TPS = 11.97  ← llama-bench -p 0 -n 128 -t 4 -r 3
+     PP_TPS = 36.23  ← llama-bench -p 512 -n 0 -t 4 -r 3
+   选 512 档的理由：真实 prompt ≈ system 84 + 摘要 ~100 + 问题 ~10 ≈ 194 tok，落在 512 以内。
+   pp 随长度显著下降（512→36.23、2048→29.37、4096→21.90、8192→15.43），
+   所以常量【必须标明取自哪一档】，否则"预算"这个词没有意义（README §13.4）。 */
+const PP_TPS = 36.23, TG_TPS = 11.97, ZH_CHARS_PER_TOKEN = 1.6;
 
 /* 端侧必须显式设上限：模型无限长生成 = 用户无限等待（今天实测 80 token≈5.9s） */
 const SYSTEM_PROMPT = [
@@ -226,7 +234,8 @@ function renderBudget(){
     '摘要 <b>' + ctxTok + '</b> tok ／ 预算 <b>' + (b.hopeless ? '0（不可行）' : b.ctx) + '</b> ｜ 问题 ' + qTok +
     ' ｜ system ' + sysTok + ' ｜ 输出≤' + maxTok + '（占 ' + b.decode.toFixed(1) + 's）' +
     '<br>冷启动 ' + cold.toFixed(1) + 's ｜ 稳态（system 命中 KV 前缀） ' + warm.toFixed(1) + 's ｜ 阈值 冷' +
-    SEC_COLD + 's／稳' + SEC_WARM + 's' + warn;
+    SEC_COLD + 's／稳' + SEC_WARM + 's' +
+    '<br>口径（实测 iQOO 12 冷机）tg128=' + TG_TPS + '／pp512=' + PP_TPS + warn;
 }
 
 let ctrl = null;
