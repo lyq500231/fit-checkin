@@ -31,11 +31,21 @@
 #else
 #define F_NEON 0
 #endif
+/* clang calls the macro __ARM_FEATURE_DOTPROD, GCC/ACLE call it __ARM_FEATURE_DOT.
+   v1 only checked __ARM_FEATURE_DOT, so a correctly built +dotprod binary reported
+   DOTPROD=0 and silently dropped the SDOT kernel: a false negative in the very line
+   that exists to prevent false readings. Accept both names. */
 #ifdef __ARM_FEATURE_DOT
-#define F_DOT 1
+#define F_DOT_A 1
 #else
-#define F_DOT 0
+#define F_DOT_A 0
 #endif
+#ifdef __ARM_FEATURE_DOTPROD
+#define F_DOT_B 1
+#else
+#define F_DOT_B 0
+#endif
+#define F_DOT (F_DOT_A || F_DOT_B)
 #ifdef __ARM_FEATURE_MATMUL_INT8
 #define F_I8MM 1
 #else
@@ -159,25 +169,29 @@ int main(int argc, char **argv) {
     int T = argc > 2 ? atoi(argv[2]) : 4;
     long long it;
     double t0, t1, w, r;
+    int ran = 0;
 
-    printf("ISA in this binary : NEON=%d DOTPROD=%d I8MM=%d FP16_ARITH=%d\n",
-           F_NEON, F_DOT, F_I8MM, F_FP16);
+    printf("ISA in this binary : NEON=%d DOTPROD=%d I8MM=%d FP16_ARITH=%d DOT_MACRO=%d/%d\n",
+           F_NEON, F_DOT, F_I8MM, F_FP16, F_DOT_A, F_DOT_B);
     printf("threads asked=%d  omp_get_max_threads=%d\n", T, omp_get_max_threads());
     omp_set_num_threads(T);
     if (F_DOT == 0)
         printf("WARN no dotprod in this binary: SDOT line would be meaningless, rebuild with -march=armv8.2-a+dotprod+i8mm+fp16\n");
 
     t0 = now_s(); r = run_f32(secs, &it); t1 = now_s(); w = t1 - t0;
-    say("f32", r, it, w, T);
+    say("f32", r, it, w, T); ran++;
 #if F_DOT
     t0 = now_s(); r = run_sdot(secs, &it); t1 = now_s(); w = t1 - t0;
-    say("sdot", r, it, w, T);
+    say("sdot", r, it, w, T); ran++;
 #endif
 #if F_I8MM
     t0 = now_s(); r = run_smmla(secs, &it); t1 = now_s(); w = t1 - t0;
-    say("smmla", r, it, w, T);
+    say("smmla", r, it, w, T); ran++;
 #endif
 
+    printf("kernels run=%d  wanted=%d\n", ran, 1 + F_DOT + F_I8MM);
+    if (ran != 1 + F_DOT + F_I8MM)
+        printf("SELF-CHECK FAILED: binary did not run every kernel its own ISA claims to support\n");
     printf("then: ridge_AI = peak_ops_s / measured_bytes_per_s\n");
     printf("      decode_AI = 2 / bytes_per_weight  (Q4_K_M: 2.4973 GB / 4.02e9 = 0.621 B/param)\n");
     printf("      if decode_AI is below ridge_AI, decode is bandwidth bound -- with a measured ceiling\n");
