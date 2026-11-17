@@ -1931,3 +1931,70 @@ function init() {
   }
 }
 init();
+
+/* ============================================================
+ * 11-17  AI 教练入口。本段全部"只增不改"，且挂载调用包在 try 里：
+ *        任何异常都不允许影响主程序与 56 条回归。
+ *
+ * 为什么是"直接导航"，而不是"先探活再跳转"（这条是设计决定，不是偷懒）：
+ *   主 App 在 https://lyq500231.github.io，本机服务在 http://127.0.0.1:8080。
+ *   从公网 https 页面向 loopback 发 fetch，会被 Private Network Access 的预检拦住
+ *   （llama-server 不会回 Access-Control-Allow-Private-Network），
+ *   于是探活【必然失败】——那是假阴性，服务其实活得好好的。
+ *   导航不受 PNA 限制，所以入口只负责把人送到同源页面；
+ *   真正的健康检查留给教练页自己做（它和 llama-server 同源，fetch 没问题）。
+ * ============================================================ */
+const COACH_URL = 'http://127.0.0.1:8080/coach.html';
+const COACH_START_CMD = 'nohup ~/llama.cpp/build/bin/llama-server -m ~/models/Qwen3-4B-Q4_K_M.gguf --host 127.0.0.1 --port 8080 -c 4096 -t 4 -np 1 --path ~/ai-coach > ~/server.log 2>&1 &';
+
+function coachEntryOverlay() {
+  const box = document.createElement('div');
+  box.id = 'coachEntryBox';
+  box.style.cssText = 'position:fixed;inset:0;z-index:99;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:12px';
+  box.innerHTML =
+    '<div style="background:var(--card,#fff);color:inherit;border-radius:14px;padding:14px;max-width:640px;width:100%;display:flex;flex-direction:column;gap:10px">' +
+      '<div style="font-weight:700">🤖 AI 教练（本机离线，数据不出手机）</div>' +
+      '<div class="muted" style="font-size:12px">教练页由手机本机的 <code>llama-server</code> 提供，地址是 <code>' + COACH_URL + '</code>。' +
+      '它必须和模型服务【同源】：网站是 https，本机服务是 http，从公网页面直接 fetch 回环地址会被浏览器的 Private Network Access 预检拦掉，' +
+      '所以这里不做在线探活，只做跳转——健康检查由教练页自己完成。</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button class="btn primary" id="coachEntryGo">打开教练页</button>' +
+        '<button class="btn" id="coachEntryCopy">复制启动命令</button>' +
+        '<button class="btn" id="coachEntryClose">关闭</button>' +
+      '</div>' +
+      '<code id="coachEntryCmd" style="font-family:ui-monospace,monospace;font-size:11px;white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.06);padding:8px;border-radius:8px"></code>' +
+      '<div class="muted" style="font-size:12px">打开后一直转圈、或摘要显示 0 tok？那是 vivo 浏览器会挂起对 <code>127.0.0.1</code> 的请求（不是页面代码的问题）。' +
+      '两条出路：① 换 Via / Edge / Firefox；② 把服务改成 <code>--host 0.0.0.0</code>，然后用手机局域网 IP 打开，绕开回环地址。</div>' +
+      '<div class="muted" id="coachEntryHint" style="font-size:12px"></div>' +
+    '</div>';
+  document.body.appendChild(box);
+  $('#coachEntryCmd', box).textContent = COACH_START_CMD;
+  $('#coachEntryClose', box).addEventListener('click', () => box.remove());
+  box.addEventListener('click', (e) => { if (e.target === box) box.remove(); });
+  $('#coachEntryGo', box).addEventListener('click', () => {
+    const w = window.open(COACH_URL, '_blank');
+    if (!w) { location.href = COACH_URL; $('#coachEntryHint', box).textContent = '新窗口被拦截，已改为当前页跳转'; }
+  });
+  $('#coachEntryCopy', box).addEventListener('click', () => {
+    const hint = $('#coachEntryHint', box);
+    const done = () => { hint.textContent = '已复制 ✔ 到 Termux 里粘贴执行，再用 curl 探活：curl -i http://127.0.0.1:8080/health'; };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(COACH_START_CMD).then(done, () => { done(); });
+      else done();
+    } catch (e) { hint.textContent = '自动复制失败：请长按上面那行命令手动全选复制'; }
+  });
+}
+
+function mountCoachEntry() {
+  const host = document.querySelector('.topbar-right');
+  if (!host || document.querySelector('.js-coach-entry')) return;
+  const b = document.createElement('button');
+  b.className = 'btn sm js-coach-entry';
+  b.type = 'button';
+  b.textContent = '🤖 AI 教练';
+  b.title = '打开本机离线教练页（需要 Termux 里的 llama-server 在跑）';
+  b.addEventListener('click', coachEntryOverlay);
+  host.appendChild(b);
+}
+
+try { mountCoachEntry(); } catch (e) { /* 入口挂了不能拖累主程序 */ }
